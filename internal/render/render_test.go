@@ -93,3 +93,109 @@ func TestPrintGroupedEmpty(t *testing.T) {
 		t.Errorf("missing header: %q", buf.String())
 	}
 }
+
+func TestPrintJSON(t *testing.T) {
+	var buf bytes.Buffer
+	PrintJSON(&buf, []scan.Listener{
+		{Addr: "0.0.0.0", Port: 3000, Process: "node", PID: "10"},
+		{Addr: "127.0.0.1", Port: 5432, Process: "postgres", PID: "-"},
+	})
+
+	want := `[
+  {
+    "addr": "0.0.0.0",
+    "port": 3000,
+    "process": "node",
+    "pid": 10
+  },
+  {
+    "addr": "127.0.0.1",
+    "port": 5432,
+    "process": "postgres",
+    "pid": null
+  }
+]
+`
+	if got := buf.String(); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestPrintGroupedJSON(t *testing.T) {
+	var buf bytes.Buffer
+	PrintGroupedJSON(&buf, []group.Group{
+		{
+			Process: "node",
+			PID:     "10",
+			Listeners: []scan.Listener{
+				{Addr: "0.0.0.0", Port: 3000, Process: "node", PID: "10"},
+				{Addr: "::", Port: 3001, Process: "node", PID: "10"},
+			},
+		},
+		{
+			Process:   "postgres",
+			PID:       "-",
+			Listeners: []scan.Listener{{Addr: "127.0.0.1", Port: 5432, Process: "postgres", PID: "-"}},
+		},
+	})
+
+	want := `[
+  {
+    "process": "node",
+    "pid": 10,
+    "ports": [
+      3000,
+      3001
+    ]
+  },
+  {
+    "process": "postgres",
+    "pid": null,
+    "ports": [
+      5432
+    ]
+  }
+]
+`
+	if got := buf.String(); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestPrintJSONEmpty(t *testing.T) {
+	tests := []struct {
+		name string
+		ls   []scan.Listener
+	}{
+		{"nil", nil},
+		{"empty", []scan.Listener{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			PrintJSON(&buf, tt.ls)
+			if got, want := buf.String(), "[]\n"; got != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestPrintGroupedJSONEmpty(t *testing.T) {
+	tests := []struct {
+		name string
+		gs   []group.Group
+	}{
+		{"nil", nil},
+		{"empty", []group.Group{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			PrintGroupedJSON(&buf, tt.gs)
+			if got, want := buf.String(), "[]\n"; got != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		})
+	}
+}
