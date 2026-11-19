@@ -1,3 +1,5 @@
-kp
-kp-go
+/kp
+/kp-go
 dist/
+start-pr.sh
+finish-pr.sh

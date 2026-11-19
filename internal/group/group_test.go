@@ -1,11 +1,13 @@
-package main
+package group
 
 import (
 	"reflect"
 	"testing"
+
+	"github.com/azcpcf/kp-go/internal/scan"
 )
 
-var sampleListeners = []Listener{
+var sampleListeners = []scan.Listener{
 	{Addr: "0.0.0.0", Port: 3000, Process: "node", PID: "10"},
 	{Addr: "::", Port: 3000, Process: "node", PID: "10"},
 	{Addr: "127.0.0.1", Port: 5432, Process: "postgres", PID: "20"},
@@ -13,8 +15,8 @@ var sampleListeners = []Listener{
 }
 
 func TestSortByPort(t *testing.T) {
-	ls := append([]Listener(nil), sampleListeners...)
-	sortByPort(ls)
+	ls := append([]scan.Listener(nil), sampleListeners...)
+	SortByPort(ls)
 	var ports []int
 	for _, l := range ls {
 		ports = append(ports, l.Port)
@@ -26,16 +28,16 @@ func TestSortByPort(t *testing.T) {
 }
 
 func TestFilterByPort(t *testing.T) {
-	if got := filterByPort(sampleListeners, 3000); len(got) != 2 {
+	if got := FilterByPort(sampleListeners, 3000); len(got) != 2 {
 		t.Errorf("port 3000: got %d, want 2", len(got))
 	}
-	if got := filterByPort(sampleListeners, 9999); len(got) != 0 {
+	if got := FilterByPort(sampleListeners, 9999); len(got) != 0 {
 		t.Errorf("port 9999: got %d, want 0", len(got))
 	}
 }
 
 func TestGroupByProcess(t *testing.T) {
-	gs := groupByProcess(sampleListeners)
+	gs := ByProcess(sampleListeners)
 	if len(gs) != 3 {
 		t.Fatalf("got %d groups, want 3", len(gs))
 	}
@@ -48,11 +50,11 @@ func TestGroupByProcess(t *testing.T) {
 }
 
 func TestGroupSamePIDDifferentName(t *testing.T) {
-	ls := []Listener{
+	ls := []scan.Listener{
 		{Port: 1, Process: "a", PID: "1"},
 		{Port: 2, Process: "a", PID: "2"},
 	}
-	if gs := groupByProcess(ls); len(gs) != 2 {
+	if gs := ByProcess(ls); len(gs) != 2 {
 		t.Errorf("same name with different PIDs must be separate groups, got %d", len(gs))
 	}
 }

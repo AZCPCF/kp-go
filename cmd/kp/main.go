@@ -4,6 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"github.com/azcpcf/kp-go/internal/group"
+	"github.com/azcpcf/kp-go/internal/kill"
+	"github.com/azcpcf/kp-go/internal/render"
+	"github.com/azcpcf/kp-go/internal/scan"
 )
 
 var version = "dev"
@@ -23,8 +28,8 @@ func parseArgs() []string {
 }
 
 func main() {
-	group := flag.Bool("group", false, "group by process")
-	flag.BoolVar(group, "g", false, "shorthand for --group")
+	grouped := flag.Bool("group", false, "group by process")
+	flag.BoolVar(grouped, "g", false, "shorthand for --group")
 	port := flag.Int("port", 0, "filter by port")
 	flag.IntVar(port, "p", 0, "shorthand for --port")
 	force := flag.Bool("force", false, "kill with SIGKILL")
@@ -36,29 +41,29 @@ func main() {
 		return
 	}
 
-	ls, err := listListeners()
+	ls, err := scan.List()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 
 	if len(positional) > 0 {
-		os.Exit(runKill(os.Stdout, os.Stderr, newKiller(), ls, positional, *force))
+		os.Exit(kill.Run(os.Stdout, os.Stderr, kill.New(), ls, positional, *force))
 	}
 
 	if *port != 0 {
-		ls = filterByPort(ls, *port)
+		ls = group.FilterByPort(ls, *port)
 	}
-	sortByPort(ls)
+	group.SortByPort(ls)
 
 	if len(ls) == 0 {
 		fmt.Println("no listeners found")
 		return
 	}
 
-	if *group {
-		printGrouped(os.Stdout, groupByProcess(ls))
+	if *grouped {
+		render.PrintGrouped(os.Stdout, group.ByProcess(ls))
 		return
 	}
-	printTable(os.Stdout, ls)
+	render.PrintTable(os.Stdout, ls)
 }

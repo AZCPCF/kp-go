@@ -1,4 +1,5 @@
-package main
+// Package kill terminates processes listening on a port.
+package kill
 
 import (
 	"errors"
@@ -7,15 +8,21 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/azcpcf/kp-go/internal/group"
+	"github.com/azcpcf/kp-go/internal/scan"
 )
 
+// Killer sends signals and waits for the process to exit.
 type Killer struct {
 	Signal func(pid int, sig syscall.Signal) error
 	Wait   time.Duration
 	Poll   time.Duration
 }
 
-func newKiller() *Killer {
+// New returns a Killer that sends SIGTERM (or SIGKILL when forced), waits up
+// to 2s for the process to exit and polls every 50ms.
+func New() *Killer {
 	return &Killer{
 		Signal: syscall.Kill,
 		Wait:   2 * time.Second,
@@ -23,7 +30,9 @@ func newKiller() *Killer {
 	}
 }
 
-func runKill(out, errw io.Writer, k *Killer, ls []Listener, args []string, force bool) int {
+// Run kills whatever listens on each port in args and returns a process exit
+// code: 0 on success, 1 if any port failed.
+func Run(out, errw io.Writer, k *Killer, ls []scan.Listener, args []string, force bool) int {
 	code := 0
 	for _, a := range args {
 		port, err := strconv.Atoi(a)
@@ -40,8 +49,8 @@ func runKill(out, errw io.Writer, k *Killer, ls []Listener, args []string, force
 	return code
 }
 
-func (k *Killer) killPort(out io.Writer, ls []Listener, port int, force bool) error {
-	matches := filterByPort(ls, port)
+func (k *Killer) killPort(out io.Writer, ls []scan.Listener, port int, force bool) error {
+	matches := group.FilterByPort(ls, port)
 	if len(matches) == 0 {
 		return errors.New("nothing is listening")
 	}

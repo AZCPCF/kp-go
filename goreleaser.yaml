@@ -2,7 +2,7 @@ version: 2
 project_name: kp
 
 builds:
-  - main: .
+  - main: ./cmd/kp
     binary: kp
     env:
       - CGO_ENABLED=0

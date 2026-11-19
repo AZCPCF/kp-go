@@ -1,4 +1,5 @@
-package main
+// Package scan discovers listening TCP sockets.
+package scan
 
 import (
 	"os/exec"
@@ -9,7 +10,17 @@ import (
 
 var usersRe = regexp.MustCompile(`\("([^"]+)",pid=(\d+)`)
 
-func listListeners() ([]Listener, error) {
+// Listener is a single listening socket and the process that owns it.
+type Listener struct {
+	Addr    string
+	Port    int
+	Process string
+	PID     string
+}
+
+// List returns all listening TCP sockets, preferring /proc and falling back to
+// "ss -tlnpH".
+func List() ([]Listener, error) {
 	ls, err := listListenersProc()
 	if err != nil {
 		return listListenersSS()

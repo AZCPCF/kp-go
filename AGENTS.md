@@ -5,13 +5,13 @@
 Final goal: a complete CLI plus a friendly, colorful terminal UI (Bubble Tea).
 
 ## Current state
-- Go, single `package main` in the repo root (will be restructured in PR 1)
-- `proc.go`: reads /proc/net/tcp{,6} and maps socket inodes to PIDs
-- `scan.go`: `listListeners()` tries /proc first, falls back to `ss -tlnpH`
-- `group.go`: sortByPort, filterByPort, groupByProcess
-- `render.go`: plain table output (tabwriter)
-- `kill.go`: `Killer` struct with an injectable `Signal` func (SIGTERM, optional SIGKILL, waits for exit)
-- Tests: table-driven, use fakes, never touch real processes
+- Go, `package main` only in `cmd/kp/main.go` (flag parsing and wiring)
+- `internal/scan/`: `Listener`, `List` (reads /proc/net/tcp{,6} and maps socket inodes to
+  PIDs; falls back to `ss -tlnpH` in `scan.go`, /proc parsing in `proc.go`)
+- `internal/group/`: `Group`, `SortByPort`, `FilterByPort`, `ByProcess`
+- `internal/render/`: plain table output (tabwriter), flat and grouped
+- `internal/kill/`: `Killer` with an injectable `Signal` func (SIGTERM, optional SIGKILL, waits for exit), `Run`
+- Tests: table-driven, use fakes, never touch real processes; colocated with their package
 - CI: GitHub Actions (vet, gofmt, test -race). Releases: GoReleaser on `v*` tags, linux amd64/arm64
 
 ## Hard rules

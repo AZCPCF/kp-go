@@ -1,4 +1,4 @@
-package main
+package kill
 
 import (
 	"bytes"
@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/azcpcf/kp-go/internal/scan"
 )
 
 type call struct {
@@ -55,10 +57,10 @@ func newTestKiller(f *fakeProc) *Killer {
 
 func TestKillSuccess(t *testing.T) {
 	f := &fakeProc{alive: map[int]bool{10: true}}
-	ls := []Listener{{Port: 3000, Process: "node", PID: "10"}}
+	ls := []scan.Listener{{Port: 3000, Process: "node", PID: "10"}}
 	var out, errb bytes.Buffer
 
-	code := runKill(&out, &errb, newTestKiller(f), ls, []string{"3000"}, false)
+	code := Run(&out, &errb, newTestKiller(f), ls, []string{"3000"}, false)
 
 	if code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, errb.String())
@@ -74,10 +76,10 @@ func TestKillSuccess(t *testing.T) {
 
 func TestKillForceUsesSIGKILL(t *testing.T) {
 	f := &fakeProc{alive: map[int]bool{10: true}}
-	ls := []Listener{{Port: 3000, Process: "node", PID: "10"}}
+	ls := []scan.Listener{{Port: 3000, Process: "node", PID: "10"}}
 	var out, errb bytes.Buffer
 
-	runKill(&out, &errb, newTestKiller(f), ls, []string{"3000"}, true)
+	Run(&out, &errb, newTestKiller(f), ls, []string{"3000"}, true)
 
 	want := []call{{10, syscall.SIGKILL}}
 	if !reflect.DeepEqual(f.killCalls(), want) {
@@ -87,13 +89,13 @@ func TestKillForceUsesSIGKILL(t *testing.T) {
 
 func TestKillDedupPID(t *testing.T) {
 	f := &fakeProc{alive: map[int]bool{10: true}}
-	ls := []Listener{
+	ls := []scan.Listener{
 		{Addr: "0.0.0.0", Port: 3000, Process: "node", PID: "10"},
 		{Addr: "::", Port: 3000, Process: "node", PID: "10"},
 	}
 	var out, errb bytes.Buffer
 
-	runKill(&out, &errb, newTestKiller(f), ls, []string{"3000"}, false)
+	Run(&out, &errb, newTestKiller(f), ls, []string{"3000"}, false)
 
 	if n := len(f.killCalls()); n != 1 {
 		t.Errorf("expected 1 kill call, got %d", n)
@@ -101,10 +103,10 @@ func TestKillDedupPID(t *testing.T) {
 }
 
 func TestKillErrors(t *testing.T) {
-	node := []Listener{{Port: 3000, Process: "node", PID: "10"}}
+	node := []scan.Listener{{Port: 3000, Process: "node", PID: "10"}}
 	tests := []struct {
 		name     string
-		ls       []Listener
+		ls       []scan.Listener
 		args     []string
 		proc     *fakeProc
 		wantText string
@@ -115,7 +117,7 @@ func TestKillErrors(t *testing.T) {
 		{"nothing listening", node, []string{"9999"}, &fakeProc{}, "nothing is listening"},
 		{
 			"unknown pid",
-			[]Listener{{Port: 22, Process: "-", PID: "-"}},
+			[]scan.Listener{{Port: 22, Process: "-", PID: "-"}},
 			[]string{"22"}, &fakeProc{}, "process unknown",
 		},
 		{
@@ -132,7 +134,7 @@ func TestKillErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var out, errb bytes.Buffer
-			code := runKill(&out, &errb, newTestKiller(tt.proc), tt.ls, tt.args, false)
+			code := Run(&out, &errb, newTestKiller(tt.proc), tt.ls, tt.args, false)
 			if code != 1 {
 				t.Errorf("code = %d, want 1", code)
 			}
@@ -148,10 +150,10 @@ func TestKillErrors(t *testing.T) {
 
 func TestKillContinuesAfterFailure(t *testing.T) {
 	f := &fakeProc{alive: map[int]bool{20: true}}
-	ls := []Listener{{Port: 4000, Process: "app", PID: "20"}}
+	ls := []scan.Listener{{Port: 4000, Process: "app", PID: "20"}}
 	var out, errb bytes.Buffer
 
-	code := runKill(&out, &errb, newTestKiller(f), ls, []string{"3000", "4000"}, false)
+	code := Run(&out, &errb, newTestKiller(f), ls, []string{"3000", "4000"}, false)
 
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)

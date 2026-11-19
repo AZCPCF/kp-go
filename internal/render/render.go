@@ -1,4 +1,5 @@
-package main
+// Package render prints listener tables to an io.Writer.
+package render
 
 import (
 	"fmt"
@@ -6,9 +7,13 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/azcpcf/kp-go/internal/group"
+	"github.com/azcpcf/kp-go/internal/scan"
 )
 
-func printTable(w io.Writer, ls []Listener) {
+// PrintTable writes ls as a plain port/address/process/pid table.
+func PrintTable(w io.Writer, ls []scan.Listener) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "PORT\tADDR\tPROCESS\tPID")
 	for _, l := range ls {
@@ -17,7 +22,8 @@ func printTable(w io.Writer, ls []Listener) {
 	tw.Flush()
 }
 
-func printGrouped(w io.Writer, gs []Group) {
+// PrintGrouped writes gs as a process/pid/ports table.
+func PrintGrouped(w io.Writer, gs []group.Group) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "PROCESS\tPID\tPORTS")
 	for _, g := range gs {
