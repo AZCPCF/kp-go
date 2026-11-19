@@ -34,6 +34,7 @@ func main() {
 	flag.IntVar(port, "p", 0, "shorthand for --port")
 	force := flag.Bool("force", false, "kill with SIGKILL")
 	flag.BoolVar(force, "f", false, "shorthand for --force")
+	jsonOut := flag.Bool("json", false, "output JSON")
 	showVersion := flag.Bool("version", false, "print version")
 	positional := parseArgs()
 	if *showVersion {
@@ -56,8 +57,17 @@ func main() {
 	}
 	group.SortByPort(ls)
 
-	if len(ls) == 0 {
+	if len(ls) == 0 && !*jsonOut {
 		fmt.Println("no listeners found")
+		return
+	}
+
+	if *jsonOut {
+		if *grouped {
+			render.PrintGroupedJSON(os.Stdout, group.ByProcess(ls))
+			return
+		}
+		render.PrintJSON(os.Stdout, ls)
 		return
 	}
 
