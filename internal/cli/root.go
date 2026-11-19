@@ -59,7 +59,7 @@ func newRoot(opts options) *cobra.Command {
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "kill with SIGKILL (shorthand kill mode)")
 	cmd.PersistentFlags().String("color", string(ui.ColorAuto), "color output: auto, always, never")
 
-	cmd.AddCommand(newKillCmd(opts), newVersionCmd(opts))
+	cmd.AddCommand(newKillCmd(opts), newVersionCmd(opts), newUICmd(opts))
 	return cmd
 }
 
