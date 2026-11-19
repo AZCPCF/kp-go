@@ -3,6 +3,8 @@ package group
 
 import (
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/azcpcf/kp-go/internal/scan"
 )
@@ -22,6 +24,45 @@ func SortByPort(ls []scan.Listener) {
 		}
 		return ls[i].Proto < ls[j].Proto
 	})
+}
+
+// SortByProcess sorts ls in place by process name (case-insensitive), then
+// ascending port and protocol.
+func SortByProcess(ls []scan.Listener) {
+	sort.SliceStable(ls, func(i, j int) bool {
+		a, b := strings.ToLower(ls[i].Process), strings.ToLower(ls[j].Process)
+		if a != b {
+			return a < b
+		}
+		if ls[i].Port != ls[j].Port {
+			return ls[i].Port < ls[j].Port
+		}
+		return ls[i].Proto < ls[j].Proto
+	})
+}
+
+// SortByPID sorts ls in place by ascending numeric pid, then port and
+// protocol. Listeners with an unknown pid are sorted last.
+func SortByPID(ls []scan.Listener) {
+	sort.SliceStable(ls, func(i, j int) bool {
+		pi, iok := pidValue(ls[i].PID)
+		pj, jok := pidValue(ls[j].PID)
+		if iok != jok {
+			return iok
+		}
+		if iok && pi != pj {
+			return pi < pj
+		}
+		if ls[i].Port != ls[j].Port {
+			return ls[i].Port < ls[j].Port
+		}
+		return ls[i].Proto < ls[j].Proto
+	})
+}
+
+func pidValue(s string) (int, bool) {
+	n, err := strconv.Atoi(s)
+	return n, err == nil
 }
 
 // FilterByPort returns the listeners on port.

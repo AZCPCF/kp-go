@@ -513,3 +513,254 @@ func TestTickSchedulesRefresh(t *testing.T) {
 		t.Errorf("scanner calls = %d, want 1", fs.calls)
 	}
 }
+
+// typeText types s into the active filter input.
+func typeText(t *testing.T, m Model, s string) Model {
+	t.Helper()
+	for _, r := range s {
+		m, _ = update(t, m, press(r, string(r)))
+	}
+	return m
+}
+
+func TestFilter(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{"process", "post", "postgres"},
+		{"port", "5353", "avahi"},
+		{"address", "127.0.0", "postgres"},
+		{"case insensitive", "NODE", "node"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, _, _ := newTestModel()
+			m = applyRefresh(t, m, testListeners)
+
+			m, _ = update(t, m, press('/', "/"))
+			if !m.filtering {
+				t.Fatal("filter input did not open")
+			}
+			m = typeText(t, m, tt.query)
+
+			if got := m.filter.Value(); got != tt.query {
+				t.Errorf("filter value = %q, want %q", got, tt.query)
+			}
+			if got := len(m.table.Rows()); got != 1 {
+				t.Fatalf("rows = %d, want 1", got)
+			}
+			if row := m.table.SelectedRow(); row == nil || row[3] != tt.want {
+				t.Errorf("selected row = %v, want process %q", row, tt.want)
+			}
+		})
+	}
+}
+
+func TestFilterEscapeClears(t *testing.T) {
+	m, _, _ := newTestModel()
+	m = applyRefresh(t, m, testListeners)
+
+	m, _ = update(t, m, press('/', "/"))
+	m = typeText(t, m, "node")
+	if got := len(m.table.Rows()); got != 1 {
+		t.Fatalf("rows while filtering = %d, want 1", got)
+	}
+
+	m, _ = update(t, m, press(tea.KeyEsc, ""))
+
+	if m.filtering {
+		t.Error("esc left the filter input open")
+	}
+	if got := m.filter.Value(); got != "" {
+		t.Errorf("filter value = %q, want empty", got)
+	}
+	if got := len(m.table.Rows()); got != len(testListeners) {
+		t.Errorf("rows = %d, want %d", got, len(testListeners))
+	}
+}
+
+func TestFilterKeepsSelectionValid(t *testing.T) {
+	m, _, _ := newTestModel()
+	m = applyRefresh(t, m, testListeners)
+
+	m, _ = update(t, m, press(tea.KeyDown, ""))
+	m, _ = update(t, m, press(tea.KeyDown, ""))
+	if got := m.table.Cursor(); got != 2 {
+		t.Fatalf("cursor before filtering = %d, want 2", got)
+	}
+
+	m, _ = update(t, m, press('/', "/"))
+	m = typeText(t, m, "node")
+
+	if got := len(m.table.Rows()); got != 1 {
+		t.Fatalf("rows = %d, want 1", got)
+	}
+	if got := m.table.Cursor(); got != 0 {
+		t.Errorf("cursor = %d, want 0 after the filter shrank the list", got)
+	}
+	row := m.table.SelectedRow()
+	if row == nil || row[3] != "node" {
+		t.Errorf("selected row = %v, want node", row)
+	}
+	if _, _, ok := m.selectedTarget(); !ok {
+		t.Error("selection is not valid after filtering")
+	}
+
+	m = typeText(t, m, "zzz")
+	if got := len(m.table.Rows()); got != 0 {
+		t.Fatalf("rows = %d, want 0", got)
+	}
+	if got := m.table.Cursor(); got != -1 {
+		t.Errorf("cursor = %d, want -1 for no rows", got)
+	}
+	if _, _, ok := m.selectedTarget(); ok {
+		t.Error("empty filter still reports a target")
+	}
+}
+
+func TestSortCycles(t *testing.T) {
+	m, _, _ := newTestModel()
+	m = applyRefresh(t, m, testListeners)
+
+	want := []struct {
+		mode   sortMode
+		label  string
+		first  string
+		last   string
+		header string
+	}{
+		{sortPort, "port", "node", "postgres", "sort: port"},
+		{sortProcess, "process", "avahi", "postgres", "sort: process"},
+		{sortPID, "pid", "node", "avahi", "sort: pid"},
+	}
+	for i, tt := range want {
+		if i > 0 {
+			m, _ = update(t, m, press('s', "s"))
+		}
+		if m.sort != tt.mode {
+			t.Fatalf("step %d: sort = %v, want %v", i, m.sort, tt.mode)
+		}
+		if got := m.listeners[0].Process; got != tt.first {
+			t.Errorf("step %d: first process = %q, want %q", i, got, tt.first)
+		}
+		if got := m.listeners[len(m.listeners)-1].Process; got != tt.last {
+			t.Errorf("step %d: last process = %q, want %q", i, got, tt.last)
+		}
+		if view := m.View().Content; !strings.Contains(view, tt.header) {
+			t.Errorf("step %d: view missing %q:\n%s", i, tt.header, view)
+		}
+	}
+
+	m, _ = update(t, m, press('s', "s"))
+	if m.sort != sortPort {
+		t.Errorf("sort after a full cycle = %v, want port", m.sort)
+	}
+}
+
+func TestGroupToggle(t *testing.T) {
+	ls := []scan.Listener{
+		{Addr: "0.0.0.0", Port: 3000, Proto: "tcp", Process: "node", PID: "10"},
+		{Addr: "::", Port: 3001, Proto: "tcp", Process: "node", PID: "10"},
+		{Addr: "127.0.0.1", Port: 5432, Proto: "tcp", Process: "postgres", PID: "20"},
+	}
+	m, _, _ := newTestModel()
+	m = applyRefresh(t, m, ls)
+
+	m, _ = update(t, m, press('g', "g"))
+
+	if !m.grouped {
+		t.Fatal("g did not enable grouped view")
+	}
+	cols := m.table.Columns()
+	if len(cols) != 3 || cols[0].Title != "PROCESS" || cols[2].Title != "PORTS" {
+		t.Errorf("grouped columns = %+v, want PROCESS/PID/PORTS", cols)
+	}
+	rows := m.table.Rows()
+	if len(rows) != 2 {
+		t.Fatalf("grouped rows = %d, want 2", len(rows))
+	}
+	if rows[0][0] != "node" || rows[0][1] != "10" || rows[0][2] != "3000, 3001" {
+		t.Errorf("first group row = %v, want node/10/3000, 3001", rows[0])
+	}
+	if view := m.View().Content; !strings.Contains(view, "grouped") {
+		t.Errorf("header does not show the grouped view:\n%s", view)
+	}
+
+	m, _ = update(t, m, press('x', "x"))
+	if m.pending == nil {
+		t.Fatal("kill confirmation did not open on a group row")
+	}
+	if m.pendingPorts != 2 {
+		t.Errorf("pending ports = %d, want 2", m.pendingPorts)
+	}
+	if view := m.View().Content; !strings.Contains(view, "on 2 ports?") {
+		t.Errorf("group modal missing port count:\n%s", view)
+	}
+	m, _ = update(t, m, press(tea.KeyEsc, ""))
+
+	m, _ = update(t, m, press('g', "g"))
+	if m.grouped {
+		t.Error("g did not return to the flat view")
+	}
+	if got := len(m.table.Columns()); got != 5 {
+		t.Errorf("flat columns = %d, want 5", got)
+	}
+	if got := len(m.table.Rows()); got != len(ls) {
+		t.Errorf("flat rows = %d, want %d", got, len(ls))
+	}
+}
+
+func TestProtoCycles(t *testing.T) {
+	m, _, _ := newTestModel()
+	m = applyRefresh(t, m, testListeners)
+
+	steps := []struct {
+		proto string
+		rows  int
+	}{
+		{scan.ProtoTCP, 2},
+		{scan.ProtoUDP, 1},
+		{scan.ProtoAll, 3},
+	}
+	for i, tt := range steps {
+		m, _ = update(t, m, press('p', "p"))
+		if m.proto != tt.proto {
+			t.Fatalf("step %d: proto = %q, want %q", i, m.proto, tt.proto)
+		}
+		if got := len(m.table.Rows()); got != tt.rows {
+			t.Errorf("step %d: rows = %d, want %d", i, got, tt.rows)
+		}
+		want := "proto: " + tt.proto
+		if view := m.View().Content; !strings.Contains(view, want) {
+			t.Errorf("step %d: view missing %q:\n%s", i, want, view)
+		}
+		for _, row := range m.table.Rows() {
+			if tt.proto != scan.ProtoAll && row[1] != tt.proto {
+				t.Errorf("step %d: row %v has proto %q", i, row, row[1])
+			}
+		}
+	}
+}
+
+func TestHelpToggle(t *testing.T) {
+	m, _, _ := newTestModel()
+	m = applyRefresh(t, m, testListeners)
+
+	m, _ = update(t, m, press('?', "?"))
+	if !m.helpOpen {
+		t.Fatal("? did not open the help overlay")
+	}
+	view := m.View().Content
+	for _, want := range []string{"Keys", "SIGTERM", "apply filter", "sort", "ctrl+c", "clear/cancel"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("help view missing %q:\n%s", want, view)
+		}
+	}
+
+	m, _ = update(t, m, press('?', "?"))
+	if m.helpOpen {
+		t.Error("? did not close the help overlay")
+	}
+}

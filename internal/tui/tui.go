@@ -7,7 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/table"
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -31,6 +34,30 @@ const (
 	widthPID     = 8
 )
 
+// sortMode selects the row order.
+type sortMode int
+
+const (
+	sortPort sortMode = iota
+	sortProcess
+	sortPID
+)
+
+// String returns the name shown in the header.
+func (s sortMode) String() string {
+	switch s {
+	case sortProcess:
+		return "process"
+	case sortPID:
+		return "pid"
+	default:
+		return "port"
+	}
+}
+
+// protoCycle is the order the p key cycles through.
+var protoCycle = []string{scan.ProtoAll, scan.ProtoTCP, scan.ProtoUDP}
+
 // Scanner provides the listeners shown by the UI.
 type Scanner interface {
 	List() ([]scan.Listener, error)
@@ -43,18 +70,29 @@ type Killer interface {
 
 // Model is the Bubble Tea model for the interactive listener table.
 type Model struct {
-	scanner   Scanner
-	killer    Killer
-	theme     ui.Theme
-	table     table.Model
-	listeners []scan.Listener
-	pending   *scan.Listener
-	status    string
-	statusErr bool
-	statusSeq int
-	err       error
-	width     int
-	height    int
+	scanner      Scanner
+	killer       Killer
+	theme        ui.Theme
+	keys         keyMap
+	table        table.Model
+	filter       textinput.Model
+	help         help.Model
+	filtering    bool
+	helpOpen     bool
+	all          []scan.Listener
+	listeners    []scan.Listener
+	groups       []group.Group
+	sort         sortMode
+	proto        string
+	grouped      bool
+	pending      *scan.Listener
+	pendingPorts int
+	status       string
+	statusErr    bool
+	statusSeq    int
+	err          error
+	width        int
+	height       int
 }
 
 // tickMsg triggers a periodic refresh.
@@ -70,6 +108,7 @@ type refreshMsg struct {
 type killMsg struct {
 	listener scan.Listener
 	force    bool
+	ports    int
 	err      error
 }
 
@@ -78,11 +117,12 @@ type clearStatusMsg struct {
 	seq int
 }
 
-// rowKey identifies a selected listener across refreshes.
+// rowKey identifies a selected listener across refreshes and row rebuilds.
 type rowKey struct {
-	proto string
-	port  int
-	pid   string
+	process string
+	proto   string
+	port    int
+	pid     string
 }
 
 // New returns a Model that reads listeners from s and kills through k.
@@ -92,21 +132,40 @@ func New(s Scanner, k Killer, theme ui.Theme) Model {
 	styles.Cell = lipgloss.NewStyle().Padding(0, 1)
 	styles.Selected = theme.Port.Bold(true).Reverse(true)
 
+	f := textinput.New()
+	f.Prompt = "/ "
+	f.Placeholder = "port, process or address"
+	fs := textinput.DefaultStyles(true)
+	fs.Focused.Text = theme.Header
+	fs.Focused.Prompt = theme.Header
+	fs.Focused.Placeholder = theme.Muted
+	fs.Blurred = fs.Focused
+	f.SetStyles(fs)
+
+	h := help.New()
+	h.Styles = help.Styles{
+		Ellipsis:       theme.Muted,
+		ShortKey:       theme.Header,
+		ShortDesc:      theme.Muted,
+		ShortSeparator: theme.Muted,
+		FullKey:        theme.Header,
+		FullDesc:       theme.Muted,
+		FullSeparator:  theme.Muted,
+	}
+
 	m := Model{
 		scanner: s,
 		killer:  k,
 		theme:   theme,
+		keys:    defaultKeyMap(),
 		table: table.New(
-			table.WithColumns([]table.Column{
-				{Title: "PORT", Width: widthPort},
-				{Title: "PROTO", Width: widthProto},
-				{Title: "ADDR", Width: widthAddr},
-				{Title: "PROCESS", Width: widthProcess},
-				{Title: "PID", Width: widthPID},
-			}),
+			table.WithColumns(flatColumns()),
 			table.WithFocused(true),
 			table.WithStyles(styles),
 		),
+		filter: f,
+		help:   h,
+		proto:  scan.ProtoAll,
 		width:  80,
 		height: 24,
 	}
@@ -129,31 +188,7 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		if m.pending != nil {
-			switch msg.String() {
-			case "t":
-				return m.startKill(false)
-			case "f":
-				return m.startKill(true)
-			case "esc":
-				m.pending = nil
-			case "ctrl+c":
-				return m, tea.Quit
-			}
-			return m, nil
-		}
-		switch msg.String() {
-		case "up", "k":
-			m.table.MoveUp(1)
-		case "down", "j":
-			m.table.MoveDown(1)
-		case "x", "d":
-			return m, m.openConfirm()
-		case "r":
-			return m, m.refresh()
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		}
+		return m.handleKey(msg)
 	case tickMsg:
 		return m, tea.Batch(m.refresh(), tick())
 	case refreshMsg:
@@ -170,20 +205,113 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.resize()
 	}
+
+	// Keep forwarding the blink/paste messages the filter input relies on.
+	if m.filtering {
+		var cmd tea.Cmd
+		m.filter, cmd = m.filter.Update(msg)
+		return m, cmd
+	}
 	return m, nil
 }
 
-// View renders the header, listener table and key hints, with a centered
-// confirmation box over the table while a kill is pending.
+// handleKey routes a key press to the overlay, filter, confirmation or table.
+func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.helpOpen {
+		switch {
+		case key.Matches(msg, m.keys.Help, m.keys.Cancel):
+			m.helpOpen = false
+		case key.Matches(msg, m.keys.Quit, m.keys.Interrupt):
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+
+	if m.filtering {
+		switch {
+		case key.Matches(msg, m.keys.Interrupt):
+			return m, tea.Quit
+		case key.Matches(msg, m.keys.Cancel):
+			m.filter.Reset()
+			m.filtering = false
+			m.filter.Blur()
+			m.rebuild()
+			return m, nil
+		case key.Matches(msg, m.keys.Accept):
+			m.filtering = false
+			m.filter.Blur()
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.filter, cmd = m.filter.Update(msg)
+		m.rebuild()
+		return m, cmd
+	}
+
+	if m.pending != nil {
+		switch {
+		case key.Matches(msg, m.keys.Term):
+			return m.startKill(false)
+		case key.Matches(msg, m.keys.Force):
+			return m.startKill(true)
+		case key.Matches(msg, m.keys.Cancel):
+			m.pending = nil
+			m.pendingPorts = 0
+		case key.Matches(msg, m.keys.Quit, m.keys.Interrupt):
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+
+	switch {
+	case key.Matches(msg, m.keys.Up):
+		m.table.MoveUp(1)
+	case key.Matches(msg, m.keys.Down):
+		m.table.MoveDown(1)
+	case key.Matches(msg, m.keys.Kill):
+		return m, m.openConfirm()
+	case key.Matches(msg, m.keys.Refresh):
+		return m, m.refresh()
+	case key.Matches(msg, m.keys.Filter):
+		m.filtering = true
+		return m, m.filter.Focus()
+	case key.Matches(msg, m.keys.Sort):
+		m.sort = (m.sort + 1) % 3
+		m.rebuild()
+	case key.Matches(msg, m.keys.Group):
+		prev, had := m.selectedKey()
+		cursor := m.table.Cursor()
+		m.grouped = !m.grouped
+		m.rebuildRows(prev, had, cursor)
+	case key.Matches(msg, m.keys.Proto):
+		m.proto = nextProto(m.proto)
+		m.rebuild()
+	case key.Matches(msg, m.keys.Help):
+		m.helpOpen = true
+	case key.Matches(msg, m.keys.Quit, m.keys.Interrupt):
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+// View renders the header, listener table and key hints, with the help or
+// confirmation box centered over the table when open.
 func (m Model) View() tea.View {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n", m.theme.Header.Render(fmt.Sprintf("kp ui - listening ports (%d)", len(m.listeners))))
+	fmt.Fprintf(&b, "%s\n", m.theme.Header.Render(m.header()))
 	if m.err != nil {
 		fmt.Fprintf(&b, "%s\n", m.theme.Error.Render("scan error: "+m.err.Error()))
 	}
-	if m.pending != nil {
+	if m.filtering {
+		b.WriteString(m.filter.View())
+		b.WriteString("\n")
+	}
+	switch {
+	case m.helpOpen:
+		b.WriteString(m.overlay(m.helpView()))
+	case m.pending != nil:
 		b.WriteString(m.overlay(m.modalView()))
-	} else {
+	default:
 		b.WriteString(m.table.View())
 	}
 	b.WriteString("\n")
@@ -195,11 +323,25 @@ func (m Model) View() tea.View {
 		b.WriteString(style.Render(m.status))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.theme.Muted.Render("j/k up/down  x kill  r refresh  q quit"))
+	b.WriteString(m.help.ShortHelpView(m.keys.ShortHelp()))
 
 	v := tea.NewView(b.String())
 	v.AltScreen = true
 	return v
+}
+
+// header describes the visible rows and the active view options.
+func (m Model) header() string {
+	h := fmt.Sprintf("kp ui - listening ports (%d)", len(m.listeners))
+	if m.grouped {
+		h += "  grouped"
+	}
+	h += "  sort: " + m.sort.String()
+	h += "  proto: " + m.proto
+	if q := m.filter.Value(); q != "" && !m.filtering {
+		h += fmt.Sprintf("  filter: %q", q)
+	}
+	return h
 }
 
 // refresh scans for listeners in a command so Update and View never block.
@@ -221,7 +363,7 @@ func tick() tea.Cmd {
 // openConfirm opens the kill confirmation for the selected listener, or shows
 // an error when its owner is unknown.
 func (m *Model) openConfirm() tea.Cmd {
-	l, ok := m.selectedListener()
+	l, ports, ok := m.selectedTarget()
 	if !ok {
 		return nil
 	}
@@ -229,6 +371,7 @@ func (m *Model) openConfirm() tea.Cmd {
 		return m.setStatus(fmt.Sprintf("pid unknown on port %d: run with sudo to see the owner", l.Port), true)
 	}
 	m.pending = &l
+	m.pendingPorts = ports
 	return nil
 }
 
@@ -238,15 +381,17 @@ func (m Model) startKill(force bool) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	l := *m.pending
+	ports := m.pendingPorts
 	m.pending = nil
-	return m, m.kill(l, force)
+	m.pendingPorts = 0
+	return m, m.kill(l, force, ports)
 }
 
 // kill terminates l in a command and reports the result as a killMsg.
-func (m Model) kill(l scan.Listener, force bool) tea.Cmd {
+func (m Model) kill(l scan.Listener, force bool, ports int) tea.Cmd {
 	k := m.killer
 	return func() tea.Msg {
-		return killMsg{listener: l, force: force, err: k.Kill(l, force)}
+		return killMsg{listener: l, force: force, ports: ports, err: k.Kill(l, force)}
 	}
 }
 
@@ -255,7 +400,7 @@ func (m *Model) killDone(msg killMsg) tea.Cmd {
 	if msg.err != nil {
 		return m.setStatus("kill failed: "+msg.err.Error(), true)
 	}
-	text := fmt.Sprintf("killed %s (pid %s) on port %d", msg.listener.Process, msg.listener.PID, msg.listener.Port)
+	text := fmt.Sprintf("killed %s (pid %s) on %s", msg.listener.Process, msg.listener.PID, portLabel(msg.ports, msg.listener.Port))
 	return tea.Batch(m.refresh(), m.setStatus(text, false))
 }
 
@@ -272,7 +417,7 @@ func (m *Model) setStatus(text string, isErr bool) tea.Cmd {
 	})
 }
 
-// apply replaces the rows, keeping the selected listener when it still exists.
+// apply replaces the scanned listeners and rebuilds the visible rows.
 func (m *Model) apply(msg refreshMsg) {
 	if msg.err != nil {
 		m.err = msg.err
@@ -281,62 +426,220 @@ func (m *Model) apply(msg refreshMsg) {
 	}
 
 	m.err = nil
-	prev, hadSelection := m.selectedKey()
+	m.all = append([]scan.Listener(nil), msg.listeners...)
+	m.rebuild()
+}
 
-	listeners := make([]scan.Listener, len(msg.listeners))
-	copy(listeners, msg.listeners)
-	group.SortByPort(listeners)
-	m.listeners = listeners
+// rebuild reapplies the filters, sort and view mode, keeping the selected row
+// when it still exists.
+func (m *Model) rebuild() {
+	prev, had := m.selectedKey()
+	m.rebuildRows(prev, had, m.table.Cursor())
+}
 
-	rows := make([]table.Row, len(m.listeners))
-	for i, l := range m.listeners {
-		rows[i] = table.Row{
-			strconv.Itoa(l.Port),
-			l.Proto,
-			l.Addr,
-			l.Process,
-			l.PID,
+// rebuildRows derives the visible listeners from the raw scan and fills the
+// table with either flat listener rows or one row per process group.
+func (m *Model) rebuildRows(prev rowKey, had bool, cursor int) {
+	query := m.filter.Value()
+	ls := make([]scan.Listener, 0, len(m.all))
+	for _, l := range m.all {
+		if m.proto != scan.ProtoAll && l.Proto != m.proto {
+			continue
 		}
+		if !matchesFilter(l, query) {
+			continue
+		}
+		ls = append(ls, l)
 	}
-	m.table.SetRows(rows)
+	sortListeners(ls, m.sort)
+	m.listeners = ls
 
-	if hadSelection {
-		for i, l := range m.listeners {
-			if keyOf(l) == prev {
-				m.table.SetCursor(i)
-				break
+	var rows []table.Row
+	if m.grouped {
+		m.groups = group.ByProcess(ls)
+		rows = make([]table.Row, len(m.groups))
+		for i, g := range m.groups {
+			rows[i] = table.Row{g.Process, g.PID, joinedPorts(g.Listeners)}
+		}
+	} else {
+		m.groups = nil
+		rows = make([]table.Row, len(ls))
+		for i, l := range ls {
+			rows[i] = table.Row{
+				strconv.Itoa(l.Port),
+				l.Proto,
+				l.Addr,
+				l.Process,
+				l.PID,
 			}
 		}
 	}
+	m.setColumns()
+	m.table.SetRows(rows)
+	m.restoreSelection(prev, had, cursor)
 	m.resize()
 }
 
-// selectedListener returns the listener under the cursor.
-func (m Model) selectedListener() (scan.Listener, bool) {
-	i := m.table.Cursor()
-	if i < 0 || i >= len(m.listeners) {
-		return scan.Listener{}, false
+// setColumns switches the table columns when the view mode changes, clearing
+// the old rows first so they are never rendered against the new columns.
+func (m *Model) setColumns() {
+	want, cols := 5, flatColumns()
+	if m.grouped {
+		want, cols = 3, groupColumns()
 	}
-	return m.listeners[i], true
+	if len(m.table.Columns()) == want {
+		return
+	}
+	m.table.SetRows(nil)
+	m.table.SetColumns(cols)
 }
 
-// selectedKey returns the identity of the selected listener.
+// restoreSelection moves the cursor back to prev when it is still visible and
+// otherwise puts it back at cursor, clamped to the new list.
+func (m *Model) restoreSelection(prev rowKey, had bool, cursor int) {
+	n := m.rowCount()
+	if had {
+		for i := 0; i < n; i++ {
+			if m.rowKey(i) == prev {
+				m.table.SetCursor(i)
+				return
+			}
+		}
+	}
+	if n == 0 {
+		return
+	}
+	m.table.SetCursor(min(max(cursor, 0), n-1))
+}
+
+// rowCount is the number of visible table rows.
+func (m Model) rowCount() int {
+	if m.grouped {
+		return len(m.groups)
+	}
+	return len(m.listeners)
+}
+
+// rowKey returns the identity of a visible row.
+func (m Model) rowKey(i int) rowKey {
+	if m.grouped {
+		g := m.groups[i]
+		return rowKey{process: g.Process, pid: g.PID}
+	}
+	return keyOf(m.listeners[i])
+}
+
+// selectedTarget returns the listener behind the cursor, plus how many ports
+// it covers (more than one for a process group).
+func (m Model) selectedTarget() (scan.Listener, int, bool) {
+	i := m.table.Cursor()
+	if m.grouped {
+		if i < 0 || i >= len(m.groups) {
+			return scan.Listener{}, 0, false
+		}
+		g := m.groups[i]
+		return g.Listeners[0], len(g.Listeners), true
+	}
+	if i < 0 || i >= len(m.listeners) {
+		return scan.Listener{}, 0, false
+	}
+	return m.listeners[i], 1, true
+}
+
+// selectedKey returns the identity of the selected row.
 func (m Model) selectedKey() (rowKey, bool) {
-	l, ok := m.selectedListener()
-	if !ok {
+	i := m.table.Cursor()
+	if i < 0 || i >= m.rowCount() {
 		return rowKey{}, false
 	}
-	return keyOf(l), true
+	return m.rowKey(i), true
 }
 
 func keyOf(l scan.Listener) rowKey {
-	return rowKey{proto: l.Proto, port: l.Port, pid: l.PID}
+	return rowKey{process: l.Process, proto: l.Proto, port: l.Port, pid: l.PID}
+}
+
+// matchesFilter reports whether l matches query on port, process or address.
+func matchesFilter(l scan.Listener, query string) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return true
+	}
+	return strings.Contains(strconv.Itoa(l.Port), q) ||
+		strings.Contains(strings.ToLower(l.Process), q) ||
+		strings.Contains(strings.ToLower(l.Addr), q)
+}
+
+// sortListeners orders ls in place using mode.
+func sortListeners(ls []scan.Listener, mode sortMode) {
+	switch mode {
+	case sortProcess:
+		group.SortByProcess(ls)
+	case sortPID:
+		group.SortByPID(ls)
+	default:
+		group.SortByPort(ls)
+	}
+}
+
+// nextProto returns the protocol after p in the all/tcp/udp cycle.
+func nextProto(p string) string {
+	for i, v := range protoCycle {
+		if v == p {
+			return protoCycle[(i+1)%len(protoCycle)]
+		}
+	}
+	return protoCycle[0]
+}
+
+// portLabel describes the kill target for the modal and status line.
+func portLabel(ports, port int) string {
+	if ports > 1 {
+		return fmt.Sprintf("%d ports", ports)
+	}
+	return fmt.Sprintf("port %d", port)
+}
+
+func flatColumns() []table.Column {
+	return []table.Column{
+		{Title: "PORT", Width: widthPort},
+		{Title: "PROTO", Width: widthProto},
+		{Title: "ADDR", Width: widthAddr},
+		{Title: "PROCESS", Width: widthProcess},
+		{Title: "PID", Width: widthPID},
+	}
+}
+
+func groupColumns() []table.Column {
+	return []table.Column{
+		{Title: "PROCESS", Width: widthProcess},
+		{Title: "PID", Width: widthPID},
+		{Title: "PORTS", Width: widthAddr},
+	}
+}
+
+func joinedPorts(ls []scan.Listener) string {
+	ports := make([]string, len(ls))
+	for i, l := range ls {
+		ports[i] = strconv.Itoa(l.Port)
+	}
+	return strings.Join(ports, ", ")
+}
+
+// helpView renders the full key reference in a bordered box.
+func (m Model) helpView() string {
+	content := m.theme.Header.Render("Keys") + "\n\n" + m.help.FullHelpView(m.keys.FullHelp())
+	content += "\n\n" + m.theme.Muted.Render("? or esc to close")
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 2).
+		Render(content)
 }
 
 // modalView renders the confirmation box.
 func (m Model) modalView() string {
 	l := *m.pending
-	title := fmt.Sprintf("Kill %s (pid %s) on port %d?", l.Process, l.PID, l.Port)
+	title := fmt.Sprintf("Kill %s (pid %s) on %s?", l.Process, l.PID, portLabel(m.pendingPorts, l.Port))
 	content := fmt.Sprintf("%s\n\n[t] SIGTERM   [f] SIGKILL   %s", title, m.theme.Muted.Render("[esc] cancel"))
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -359,6 +662,9 @@ func (m Model) overlay(content string) string {
 // bodyHeight is the number of lines available to the table or modal.
 func (m Model) bodyHeight() int {
 	h := m.height - 2
+	if m.filtering {
+		h--
+	}
 	if m.err != nil {
 		h--
 	}
@@ -368,8 +674,10 @@ func (m Model) bodyHeight() int {
 	return max(1, h)
 }
 
-// resize fits the table and modal between the header and footer lines.
+// resize fits the table and overlays between the header and footer lines.
 func (m *Model) resize() {
 	m.table.SetWidth(m.width)
 	m.table.SetHeight(m.bodyHeight())
+	m.help.SetWidth(m.width)
+	m.filter.SetWidth(max(10, m.width-4))
 }
