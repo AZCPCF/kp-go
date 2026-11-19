@@ -54,7 +54,6 @@ func Main(args []string, out, errw io.Writer) int {
 		scan:    scan.List,
 		killer:  kill.New(),
 		version: version,
-		ui:      tui.Run,
 	})
 }
 

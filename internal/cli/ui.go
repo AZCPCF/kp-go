@@ -3,6 +3,7 @@ package cli
 import (
 	"github.com/azcpcf/kp-go/internal/scan"
 	"github.com/azcpcf/kp-go/internal/tui"
+	"github.com/azcpcf/kp-go/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -19,7 +20,10 @@ func newUICmd(opts options) *cobra.Command {
 			}
 			run := opts.ui
 			if run == nil {
-				run = tui.Run
+				k := opts.killer
+				run = func(s tui.Scanner, theme ui.Theme) error {
+					return tui.Run(s, k, theme)
+				}
 			}
 			if err := run(scanAll{list: opts.scan}, theme); err != nil {
 				return &exitError{code: 1, err: err}
