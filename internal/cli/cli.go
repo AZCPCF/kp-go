@@ -9,6 +9,8 @@ import (
 
 	"github.com/azcpcf/kp-go/internal/kill"
 	"github.com/azcpcf/kp-go/internal/scan"
+	"github.com/azcpcf/kp-go/internal/tui"
+	"github.com/azcpcf/kp-go/internal/ui"
 )
 
 // version is set at build time with -ldflags -X.
@@ -19,6 +21,7 @@ type options struct {
 	scan    func(proto string) ([]scan.Listener, error)
 	killer  *kill.Killer
 	version string
+	ui      func(scanner tui.Scanner, theme ui.Theme) error
 }
 
 // exitError carries a process exit code. A nil err means the failure was
@@ -51,6 +54,7 @@ func Main(args []string, out, errw io.Writer) int {
 		scan:    scan.List,
 		killer:  kill.New(),
 		version: version,
+		ui:      tui.Run,
 	})
 }
 
