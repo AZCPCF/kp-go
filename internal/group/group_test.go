@@ -27,6 +27,23 @@ func TestSortByPort(t *testing.T) {
 	}
 }
 
+func TestSortByPortProtoTiebreak(t *testing.T) {
+	ls := []scan.Listener{
+		{Port: 53, Proto: "udp"},
+		{Port: 80, Proto: "tcp"},
+		{Port: 53, Proto: "tcp"},
+	}
+	SortByPort(ls)
+	want := []scan.Listener{
+		{Port: 53, Proto: "tcp"},
+		{Port: 53, Proto: "udp"},
+		{Port: 80, Proto: "tcp"},
+	}
+	if !reflect.DeepEqual(ls, want) {
+		t.Errorf("got %+v, want %+v", ls, want)
+	}
+}
+
 func TestFilterByPort(t *testing.T) {
 	if got := FilterByPort(sampleListeners, 3000); len(got) != 2 {
 		t.Errorf("port 3000: got %d, want 2", len(got))

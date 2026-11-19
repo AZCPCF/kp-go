@@ -20,17 +20,17 @@ func lines(s string) []string {
 func TestPrintTable(t *testing.T) {
 	var buf bytes.Buffer
 	PrintTable(&buf, []scan.Listener{
-		{Addr: "0.0.0.0", Port: 3000, Process: "node", PID: "10"},
+		{Addr: "0.0.0.0", Port: 3000, Proto: "tcp", Process: "node", PID: "10"},
 	})
 
 	got := lines(buf.String())
 	if len(got) != 2 {
 		t.Fatalf("got %d lines, want 2: %q", len(got), buf.String())
 	}
-	if fields := strings.Fields(got[0]); len(fields) != 4 || fields[0] != "PORT" || fields[1] != "ADDR" || fields[2] != "PROCESS" || fields[3] != "PID" {
+	if fields := strings.Fields(got[0]); len(fields) != 5 || fields[0] != "PORT" || fields[1] != "PROTO" || fields[2] != "ADDR" || fields[3] != "PROCESS" || fields[4] != "PID" {
 		t.Errorf("header = %q", got[0])
 	}
-	want := []string{"3000", "0.0.0.0", "node", "10"}
+	want := []string{"3000", "tcp", "0.0.0.0", "node", "10"}
 	fields := strings.Fields(got[1])
 	if len(fields) != len(want) {
 		t.Fatalf("row = %q, want %d columns", got[1], len(want))
@@ -39,6 +39,25 @@ func TestPrintTable(t *testing.T) {
 		if fields[i] != want[i] {
 			t.Errorf("column %d = %q, want %q", i, fields[i], want[i])
 		}
+	}
+}
+
+func TestPrintTableMixedProtos(t *testing.T) {
+	var buf bytes.Buffer
+	PrintTable(&buf, []scan.Listener{
+		{Addr: "0.0.0.0", Port: 53, Proto: "tcp", Process: "dns", PID: "10"},
+		{Addr: "0.0.0.0", Port: 53, Proto: "udp", Process: "dns", PID: "10"},
+	})
+
+	got := lines(buf.String())
+	if len(got) != 3 {
+		t.Fatalf("got %d lines, want 3: %q", len(got), buf.String())
+	}
+	if fields := strings.Fields(got[1]); fields[1] != "tcp" {
+		t.Errorf("first row proto = %q, want tcp", fields[1])
+	}
+	if fields := strings.Fields(got[2]); fields[1] != "udp" {
+		t.Errorf("second row proto = %q, want udp", fields[1])
 	}
 }
 
@@ -97,21 +116,23 @@ func TestPrintGroupedEmpty(t *testing.T) {
 func TestPrintJSON(t *testing.T) {
 	var buf bytes.Buffer
 	PrintJSON(&buf, []scan.Listener{
-		{Addr: "0.0.0.0", Port: 3000, Process: "node", PID: "10"},
-		{Addr: "127.0.0.1", Port: 5432, Process: "postgres", PID: "-"},
+		{Addr: "0.0.0.0", Port: 3000, Proto: "tcp", Process: "node", PID: "10"},
+		{Addr: "0.0.0.0", Port: 5353, Proto: "udp", Process: "avahi", PID: "-"},
 	})
 
 	want := `[
   {
     "addr": "0.0.0.0",
     "port": 3000,
+    "proto": "tcp",
     "process": "node",
     "pid": 10
   },
   {
-    "addr": "127.0.0.1",
-    "port": 5432,
-    "process": "postgres",
+    "addr": "0.0.0.0",
+    "port": 5353,
+    "proto": "udp",
+    "process": "avahi",
     "pid": null
   }
 ]
