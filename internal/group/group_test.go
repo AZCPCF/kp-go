@@ -75,3 +75,34 @@ func TestGroupSamePIDDifferentName(t *testing.T) {
 		t.Errorf("same name with different PIDs must be separate groups, got %d", len(gs))
 	}
 }
+
+func TestSortByProcess(t *testing.T) {
+	ls := []scan.Listener{
+		{Port: 1, Proto: "tcp", Process: "Zed", PID: "3"},
+		{Port: 2, Proto: "tcp", Process: "alpha", PID: "2"},
+		{Port: 3, Proto: "tcp", Process: "Alpha", PID: "1"},
+	}
+	SortByProcess(ls)
+	want := []string{"alpha", "Alpha", "Zed"}
+	for i, w := range want {
+		if ls[i].Process != w {
+			t.Errorf("index %d process = %q, want %q", i, ls[i].Process, w)
+		}
+	}
+}
+
+func TestSortByPID(t *testing.T) {
+	ls := []scan.Listener{
+		{Port: 1, PID: "-"},
+		{Port: 4, PID: "10"},
+		{Port: 3, PID: "2"},
+		{Port: 2, PID: "10"},
+	}
+	SortByPID(ls)
+	want := []int{3, 2, 4, 1}
+	for i, w := range want {
+		if ls[i].Port != w {
+			t.Errorf("index %d port = %d, want %d", i, ls[i].Port, w)
+		}
+	}
+}
