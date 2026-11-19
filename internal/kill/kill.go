@@ -49,6 +49,21 @@ func Run(out, errw io.Writer, k *Killer, ls []scan.Listener, args []string, forc
 	return code
 }
 
+// Kill terminates the process owning l, using SIGKILL when force is set.
+func (k *Killer) Kill(l scan.Listener, force bool) error {
+	if l.PID == "-" {
+		return errors.New("process unknown (try sudo)")
+	}
+	pid, err := strconv.Atoi(l.PID)
+	if err != nil {
+		return fmt.Errorf("invalid pid %q", l.PID)
+	}
+	if err := k.terminate(pid, force); err != nil {
+		return fmt.Errorf("%s (pid %d): %w", l.Process, pid, err)
+	}
+	return nil
+}
+
 func (k *Killer) killPort(out io.Writer, ls []scan.Listener, port int, force bool) error {
 	matches := group.FilterByPort(ls, port)
 	if len(matches) == 0 {
@@ -60,14 +75,10 @@ func (k *Killer) killPort(out io.Writer, ls []scan.Listener, port int, force boo
 			continue
 		}
 		seen[l.PID] = true
-		if l.PID == "-" {
-			return errors.New("process unknown (try sudo)")
+		if err := k.Kill(l, force); err != nil {
+			return err
 		}
-		pid, _ := strconv.Atoi(l.PID)
-		if err := k.terminate(pid, force); err != nil {
-			return fmt.Errorf("%s (pid %d): %w", l.Process, pid, err)
-		}
-		fmt.Fprintf(out, "killed %s (pid %d) on port %d\n", l.Process, pid, port)
+		fmt.Fprintf(out, "killed %s (pid %s) on port %d\n", l.Process, l.PID, port)
 	}
 	return nil
 }

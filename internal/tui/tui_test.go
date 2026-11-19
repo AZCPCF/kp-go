@@ -30,9 +30,25 @@ func (f *fakeScanner) List() ([]scan.Listener, error) {
 	return f.listeners, f.err
 }
 
-func newTestModel() (Model, *fakeScanner) {
+type killCall struct {
+	listener scan.Listener
+	force    bool
+}
+
+type fakeKiller struct {
+	calls []killCall
+	err   error
+}
+
+func (f *fakeKiller) Kill(l scan.Listener, force bool) error {
+	f.calls = append(f.calls, killCall{listener: l, force: force})
+	return f.err
+}
+
+func newTestModel() (Model, *fakeScanner, *fakeKiller) {
 	fs := &fakeScanner{listeners: testListeners}
-	return New(fs, ui.New(false)), fs
+	fk := &fakeKiller{}
+	return New(fs, fk, ui.New(false)), fs, fk
 }
 
 // update feeds msg to the model and returns the concrete Model type.
@@ -57,7 +73,7 @@ func press(code rune, text string) tea.KeyPressMsg {
 }
 
 func TestNavigation(t *testing.T) {
-	m, _ := newTestModel()
+	m, _, _ := newTestModel()
 	m = applyRefresh(t, m, testListeners)
 
 	if got := m.table.Cursor(); got != 0 {
@@ -85,7 +101,7 @@ func TestNavigation(t *testing.T) {
 }
 
 func TestRefreshPreservesSelection(t *testing.T) {
-	m, _ := newTestModel()
+	m, _, _ := newTestModel()
 	m = applyRefresh(t, m, testListeners)
 
 	m, _ = update(t, m, press(tea.KeyDown, ""))
@@ -115,7 +131,7 @@ func TestRefreshPreservesSelection(t *testing.T) {
 }
 
 func TestRefreshSelectedRowGone(t *testing.T) {
-	m, _ := newTestModel()
+	m, _, _ := newTestModel()
 	m = applyRefresh(t, m, testListeners)
 
 	m, _ = update(t, m, press(tea.KeyDown, ""))
@@ -134,7 +150,7 @@ func TestRefreshSelectedRowGone(t *testing.T) {
 }
 
 func TestRefreshEmpty(t *testing.T) {
-	m, _ := newTestModel()
+	m, _, _ := newTestModel()
 	m = applyRefresh(t, m, nil)
 
 	if m.table.SelectedRow() != nil {
@@ -147,7 +163,7 @@ func TestRefreshEmpty(t *testing.T) {
 }
 
 func TestWindowSize(t *testing.T) {
-	m, _ := newTestModel()
+	m, _, _ := newTestModel()
 	m, _ = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	if m.width != 100 || m.height != 30 {
@@ -168,7 +184,7 @@ func TestQuitKeys(t *testing.T) {
 		{Code: 'c', Mod: tea.ModCtrl},
 	}
 	for _, msg := range keys {
-		m, _ := newTestModel()
+		m, _, _ := newTestModel()
 		_, cmd := update(t, m, msg)
 		if cmd == nil {
 			t.Fatalf("%q: quit command is nil", msg.String())
@@ -180,7 +196,7 @@ func TestQuitKeys(t *testing.T) {
 }
 
 func TestRefreshKeyRunsScanner(t *testing.T) {
-	m, fs := newTestModel()
+	m, fs, _ := newTestModel()
 	_, cmd := update(t, m, press('r', "r"))
 	if cmd == nil {
 		t.Fatal("refresh command is nil")
@@ -200,7 +216,7 @@ func TestRefreshKeyRunsScanner(t *testing.T) {
 }
 
 func TestScanErrorShown(t *testing.T) {
-	m, fs := newTestModel()
+	m, fs, _ := newTestModel()
 	m = applyRefresh(t, m, testListeners)
 
 	fs.err = errBoom
@@ -227,7 +243,7 @@ func TestScanErrorShown(t *testing.T) {
 }
 
 func TestView(t *testing.T) {
-	m, _ := newTestModel()
+	m, _, _ := newTestModel()
 	m = applyRefresh(t, m, testListeners)
 
 	view := m.View()
@@ -236,7 +252,7 @@ func TestView(t *testing.T) {
 		"listening ports (3)",
 		"PORT", "PROTO", "ADDR", "PROCESS", "PID",
 		"node", "postgres", "avahi",
-		"r refresh", "q quit",
+		"x kill", "r refresh", "q quit",
 	} {
 		if !strings.Contains(view.Content, want) {
 			t.Errorf("view missing %q:\n%s", want, view.Content)
@@ -248,7 +264,7 @@ func TestView(t *testing.T) {
 }
 
 func TestInit(t *testing.T) {
-	m, fs := newTestModel()
+	m, fs, _ := newTestModel()
 	cmd := m.Init()
 	if cmd == nil {
 		t.Fatal("Init returned nil, want the scan and tick commands")
@@ -268,8 +284,216 @@ func TestInit(t *testing.T) {
 	}
 }
 
+func openModal(t *testing.T, m Model) Model {
+	t.Helper()
+	m, _ = update(t, m, press('x', "x"))
+	if m.pending == nil {
+		t.Fatal("modal did not open")
+	}
+	return m
+}
+
+func TestKillModalOpens(t *testing.T) {
+	for _, key := range []tea.KeyPressMsg{press('x', "x"), press('d', "d")} {
+		m, _, fk := newTestModel()
+		m = applyRefresh(t, m, testListeners)
+
+		m, cmd := update(t, m, key)
+		if cmd != nil {
+			t.Errorf("%q: modal opened with a command", key.String())
+		}
+		if m.pending == nil {
+			t.Fatalf("%q: modal did not open", key.String())
+		}
+		if len(fk.calls) != 0 {
+			t.Errorf("%q: killer called before confirmation", key.String())
+		}
+		view := m.View().Content
+		for _, want := range []string{
+			"Kill node (pid 10) on port 3000?",
+			"[t] SIGTERM", "[f] SIGKILL", "[esc] cancel",
+			"PORT", "node",
+		} {
+			if !strings.Contains(view, want) {
+				t.Errorf("%q: view missing %q:\n%s", key.String(), want, view)
+			}
+		}
+	}
+}
+
+func TestKillModalCancel(t *testing.T) {
+	m, _, fk := newTestModel()
+	m = applyRefresh(t, m, testListeners)
+	m = openModal(t, m)
+
+	m, cmd := update(t, m, press(tea.KeyEsc, ""))
+
+	if cmd != nil {
+		t.Errorf("cancel returned a command")
+	}
+	if m.pending != nil {
+		t.Error("cancel left the modal open")
+	}
+	if len(fk.calls) != 0 {
+		t.Errorf("cancel called the killer %d times", len(fk.calls))
+	}
+	if m.status != "" {
+		t.Errorf("cancel set status %q", m.status)
+	}
+}
+
+func TestKillConfirm(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   tea.KeyPressMsg
+		force bool
+	}{
+		{"sigterm", press('t', "t"), false},
+		{"sigkill", press('f', "f"), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, fs, fk := newTestModel()
+			m = applyRefresh(t, m, testListeners)
+			m = openModal(t, m)
+
+			m, cmd := update(t, m, tt.key)
+			if m.pending != nil {
+				t.Fatal("confirmation did not close the modal")
+			}
+			if cmd == nil {
+				t.Fatal("confirmation returned no kill command")
+			}
+			msg, ok := cmd().(killMsg)
+			if !ok {
+				t.Fatalf("kill command returned %T, want killMsg", msg)
+			}
+			if msg.force != tt.force {
+				t.Errorf("killMsg force = %v, want %v", msg.force, tt.force)
+			}
+			if len(fk.calls) != 1 {
+				t.Fatalf("killer calls = %d, want 1", len(fk.calls))
+			}
+			if got := fk.calls[0]; got.force != tt.force || got.listener.Port != 3000 {
+				t.Errorf("kill call = %+v, want port 3000 force %v", got, tt.force)
+			}
+
+			m, cmd = update(t, m, msg)
+			if m.statusErr {
+				t.Errorf("status is an error: %q", m.status)
+			}
+			if want := "killed node (pid 10) on port 3000"; m.status != want {
+				t.Errorf("status = %q, want %q", m.status, want)
+			}
+
+			batch, ok := cmd().(tea.BatchMsg)
+			if !ok {
+				t.Fatalf("result command returned %T, want tea.BatchMsg", cmd())
+			}
+			if len(batch) != 2 {
+				t.Fatalf("result batch has %d commands, want refresh and clear timer", len(batch))
+			}
+			if _, ok := batch[0]().(refreshMsg); !ok {
+				t.Error("success did not schedule an immediate refresh")
+			}
+			if fs.calls != 1 {
+				t.Errorf("scanner calls = %d, want 1", fs.calls)
+			}
+		})
+	}
+}
+
+func TestKillError(t *testing.T) {
+	m, fs, fk := newTestModel()
+	m = applyRefresh(t, m, testListeners)
+	fk.err = errBoom
+	m = openModal(t, m)
+
+	m, cmd := update(t, m, press('t', "t"))
+	msg, ok := cmd().(killMsg)
+	if !ok {
+		t.Fatalf("kill command returned %T, want killMsg", msg)
+	}
+	if msg.err == nil {
+		t.Fatal("killMsg error = nil, want boom")
+	}
+
+	m, cmd = update(t, m, msg)
+
+	if !m.statusErr {
+		t.Errorf("status %q is not marked as an error", m.status)
+	}
+	if want := "kill failed: boom"; m.status != want {
+		t.Errorf("status = %q, want %q", m.status, want)
+	}
+	if fs.calls != 0 {
+		t.Errorf("failed kill triggered a refresh: scanner calls = %d", fs.calls)
+	}
+	if cmd == nil {
+		t.Error("failed kill did not schedule the status clear")
+	}
+	if view := m.View().Content; !strings.Contains(view, "kill failed: boom") {
+		t.Errorf("view missing error status:\n%s", view)
+	}
+}
+
+func TestKillUnknownPID(t *testing.T) {
+	m, _, fk := newTestModel()
+	m = applyRefresh(t, m, []scan.Listener{
+		{Addr: "0.0.0.0", Port: 22, Proto: "tcp", Process: "-", PID: "-"},
+	})
+
+	m, cmd := update(t, m, press('x', "x"))
+
+	if m.pending != nil {
+		t.Error("unknown PID opened the modal")
+	}
+	if len(fk.calls) != 0 {
+		t.Errorf("unknown PID called the killer %d times", len(fk.calls))
+	}
+	if cmd == nil {
+		t.Error("unknown PID did not schedule the status clear")
+	}
+	if !m.statusErr {
+		t.Errorf("status %q is not marked as an error", m.status)
+	}
+	if want := "run with sudo to see the owner"; !strings.Contains(m.status, want) {
+		t.Errorf("status = %q, want it to contain %q", m.status, want)
+	}
+	view := m.View().Content
+	if strings.Contains(view, "SIGTERM") {
+		t.Errorf("unknown PID rendered the modal:\n%s", view)
+	}
+	if !strings.Contains(view, "run with sudo to see the owner") {
+		t.Errorf("view missing unknown PID status:\n%s", view)
+	}
+}
+
+func TestKillStatusAutoClears(t *testing.T) {
+	m, _, _ := newTestModel()
+	m = applyRefresh(t, m, testListeners)
+	m = openModal(t, m)
+
+	m, cmd := update(t, m, press('t', "t"))
+	m, _ = update(t, m, cmd().(killMsg))
+	if m.status == "" {
+		t.Fatal("success did not set a status")
+	}
+
+	seq := m.statusSeq
+	m, _ = update(t, m, clearStatusMsg{seq: seq - 1})
+	if m.status == "" {
+		t.Error("a stale clear timer removed the status")
+	}
+
+	m, _ = update(t, m, clearStatusMsg{seq: seq})
+	if m.status != "" {
+		t.Errorf("status = %q, want it cleared", m.status)
+	}
+}
+
 func TestTickSchedulesRefresh(t *testing.T) {
-	m, fs := newTestModel()
+	m, fs, _ := newTestModel()
 	_, cmd := update(t, m, tickMsg{})
 	if cmd == nil {
 		t.Fatal("tick command is nil")

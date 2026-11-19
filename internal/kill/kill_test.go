@@ -87,6 +87,73 @@ func TestKillForceUsesSIGKILL(t *testing.T) {
 	}
 }
 
+func TestKillListener(t *testing.T) {
+	tests := []struct {
+		name      string
+		ls        scan.Listener
+		force     bool
+		proc      *fakeProc
+		wantSig   syscall.Signal
+		wantErr   string
+		wantCalls int
+	}{
+		{
+			name:    "sigterm",
+			ls:      scan.Listener{Port: 3000, Process: "node", PID: "10"},
+			proc:    &fakeProc{alive: map[int]bool{10: true}},
+			wantSig: syscall.SIGTERM,
+		},
+		{
+			name:    "sigkill",
+			ls:      scan.Listener{Port: 3000, Process: "node", PID: "10"},
+			force:   true,
+			proc:    &fakeProc{alive: map[int]bool{10: true}},
+			wantSig: syscall.SIGKILL,
+		},
+		{
+			name:    "unknown pid",
+			ls:      scan.Listener{Port: 22, Process: "-", PID: "-"},
+			proc:    &fakeProc{},
+			wantErr: "process unknown",
+		},
+		{
+			name:    "invalid pid",
+			ls:      scan.Listener{Port: 3000, Process: "node", PID: "abc"},
+			proc:    &fakeProc{},
+			wantErr: `invalid pid "abc"`,
+		},
+		{
+			name:      "permission denied",
+			ls:        scan.Listener{Port: 3000, Process: "node", PID: "10"},
+			proc:      &fakeProc{errs: map[int]error{10: syscall.EPERM}},
+			wantErr:   "permission denied",
+			wantCalls: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := newTestKiller(tt.proc).Kill(tt.ls, tt.force)
+
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want it to contain %q", err, tt.wantErr)
+				}
+				if n := len(tt.proc.killCalls()); n != tt.wantCalls {
+					t.Errorf("signalled %d times, want %d", n, tt.wantCalls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Kill() error = %v", err)
+			}
+			want := []call{{10, tt.wantSig}}
+			if !reflect.DeepEqual(tt.proc.killCalls(), want) {
+				t.Errorf("got %v, want %v", tt.proc.killCalls(), want)
+			}
+		})
+	}
+}
+
 func TestKillUDP(t *testing.T) {
 	f := &fakeProc{alive: map[int]bool{30: true}}
 	ls := []scan.Listener{{Addr: "0.0.0.0", Port: 5353, Proto: "udp", Process: "avahi", PID: "30"}}
