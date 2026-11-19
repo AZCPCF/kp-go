@@ -2,11 +2,13 @@ package render
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/azcpcf/kp-go/internal/group"
 	"github.com/azcpcf/kp-go/internal/scan"
+	"github.com/azcpcf/kp-go/internal/ui"
 )
 
 // lines splits rendered output into its trailing-newline-terminated lines.
@@ -21,7 +23,7 @@ func TestPrintTable(t *testing.T) {
 	var buf bytes.Buffer
 	PrintTable(&buf, []scan.Listener{
 		{Addr: "0.0.0.0", Port: 3000, Proto: "tcp", Process: "node", PID: "10"},
-	})
+	}, ui.New(false))
 
 	got := lines(buf.String())
 	if len(got) != 2 {
@@ -47,7 +49,7 @@ func TestPrintTableMixedProtos(t *testing.T) {
 	PrintTable(&buf, []scan.Listener{
 		{Addr: "0.0.0.0", Port: 53, Proto: "tcp", Process: "dns", PID: "10"},
 		{Addr: "0.0.0.0", Port: 53, Proto: "udp", Process: "dns", PID: "10"},
-	})
+	}, ui.New(false))
 
 	got := lines(buf.String())
 	if len(got) != 3 {
@@ -63,7 +65,7 @@ func TestPrintTableMixedProtos(t *testing.T) {
 
 func TestPrintTableEmpty(t *testing.T) {
 	var buf bytes.Buffer
-	PrintTable(&buf, nil)
+	PrintTable(&buf, nil, ui.New(false))
 
 	if got := lines(buf.String()); len(got) != 1 {
 		t.Fatalf("got %d lines, want header only: %q", len(got), buf.String())
@@ -84,7 +86,7 @@ func TestPrintGrouped(t *testing.T) {
 				{Addr: "::", Port: 3001, Process: "node", PID: "10"},
 			},
 		},
-	})
+	}, ui.New(false))
 
 	got := lines(buf.String())
 	if len(got) != 2 {
@@ -103,13 +105,66 @@ func TestPrintGrouped(t *testing.T) {
 
 func TestPrintGroupedEmpty(t *testing.T) {
 	var buf bytes.Buffer
-	PrintGrouped(&buf, nil)
+	PrintGrouped(&buf, nil, ui.New(false))
 
 	if got := lines(buf.String()); len(got) != 1 {
 		t.Fatalf("got %d lines, want header only: %q", len(got), buf.String())
 	}
 	if !strings.HasPrefix(buf.String(), "PROCESS") {
 		t.Errorf("missing header: %q", buf.String())
+	}
+}
+
+func TestPrintTablePlainExact(t *testing.T) {
+	var buf bytes.Buffer
+	PrintTable(&buf, []scan.Listener{
+		{Addr: "0.0.0.0", Port: 3000, Proto: "tcp", Process: "node", PID: "10"},
+		{Addr: "127.0.0.1", Port: 5432, Proto: "udp", Process: "postgres", PID: "-"},
+	}, ui.New(false))
+
+	want := "PORT  PROTO  ADDR       PROCESS   PID\n" +
+		"3000  tcp    0.0.0.0    node      10\n" +
+		"5432  udp    127.0.0.1  postgres  -\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestPrintGroupedPlainExact(t *testing.T) {
+	var buf bytes.Buffer
+	PrintGrouped(&buf, []group.Group{
+		{
+			Process: "node",
+			PID:     "10",
+			Listeners: []scan.Listener{
+				{Addr: "0.0.0.0", Port: 3000, Proto: "tcp", Process: "node", PID: "10"},
+				{Addr: "::", Port: 3001, Proto: "tcp", Process: "node", PID: "10"},
+			},
+		},
+	}, ui.New(false))
+
+	want := "PROCESS  PID  PORTS\nnode     10   3000, 3001\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestPrintTableColorKeepsLayout(t *testing.T) {
+	ls := []scan.Listener{
+		{Addr: "0.0.0.0", Port: 3000, Proto: "tcp", Process: "node", PID: "10"},
+		{Addr: "127.0.0.1", Port: 5432, Proto: "udp", Process: "postgres", PID: "-"},
+	}
+
+	var plain, colored bytes.Buffer
+	PrintTable(&plain, ls, ui.New(false))
+	PrintTable(&colored, ls, ui.New(true))
+
+	if !strings.Contains(colored.String(), "\x1b[") {
+		t.Fatalf("colored output has no ANSI escapes: %q", colored.String())
+	}
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	if got, want := ansi.ReplaceAllString(colored.String(), ""), plain.String(); got != want {
+		t.Errorf("stripped colored output:\n%q\nwant plain:\n%q", got, want)
 	}
 }
 

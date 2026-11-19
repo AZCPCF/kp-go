@@ -389,3 +389,115 @@ func TestHelpAndCompletion(t *testing.T) {
 		}
 	})
 }
+
+func TestColorNeverPlainExact(t *testing.T) {
+	opts, _, _ := testOptions(testListeners)
+	code, out, errb := execCLI([]string{"--color", "never"}, opts)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errb)
+	}
+	want := "PORT  PROTO  ADDR       PROCESS   PID\n" +
+		"3000  tcp    0.0.0.0    node      10\n" +
+		"5432  tcp    127.0.0.1  postgres  20\n"
+	if out != want {
+		t.Errorf("got:\n%q\nwant:\n%q", out, want)
+	}
+}
+
+func TestColorAutoPlainWhenPiped(t *testing.T) {
+	opts, _, _ := testOptions(testListeners)
+	code, out, errb := execCLI(nil, opts)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errb)
+	}
+	if strings.Contains(out, "\x1b[") {
+		t.Errorf("stdout has ANSI escapes: %q", out)
+	}
+}
+
+func TestColorAlwaysStylesTable(t *testing.T) {
+	opts, _, _ := testOptions(testListeners)
+	code, out, errb := execCLI([]string{"--color", "always"}, opts)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errb)
+	}
+	if !strings.Contains(out, "\x1b[") {
+		t.Errorf("stdout has no ANSI escapes: %q", out)
+	}
+	for _, want := range []string{"PORT", "3000", "node"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout = %q, want it to contain %q", out, want)
+		}
+	}
+}
+
+func TestColorAlwaysKill(t *testing.T) {
+	opts, _, _ := testOptions(testListeners)
+	code, out, errb := execCLI([]string{"--color", "always", "3000"}, opts)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errb)
+	}
+	if !strings.Contains(out, "\x1b[") {
+		t.Errorf("stdout has no ANSI escapes: %q", out)
+	}
+	if !strings.Contains(out, "killed node (pid 10) on port 3000") {
+		t.Errorf("unexpected stdout: %q", out)
+	}
+}
+
+func TestColorAlwaysKillError(t *testing.T) {
+	opts, _, _ := testOptions(testListeners)
+	code, _, errb := execCLI([]string{"kill", "9999", "--color", "always"}, opts)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(errb, "\x1b[") {
+		t.Errorf("stderr has no ANSI escapes: %q", errb)
+	}
+	if !strings.Contains(errb, "nothing is listening") {
+		t.Errorf("stderr = %q, want the kill error", errb)
+	}
+}
+
+func TestColorAlwaysOverridesNoColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	opts, _, _ := testOptions(testListeners)
+	code, out, errb := execCLI([]string{"--color", "always"}, opts)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errb)
+	}
+	if !strings.Contains(out, "\x1b[") {
+		t.Errorf("stdout has no ANSI escapes: %q", out)
+	}
+}
+
+func TestJSONIgnoresColor(t *testing.T) {
+	opts, _, _ := testOptions(testListeners)
+	code, out, errb := execCLI([]string{"--json", "--color", "always"}, opts)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errb)
+	}
+	if strings.Contains(out, "\x1b[") {
+		t.Errorf("JSON output has ANSI escapes: %q", out)
+	}
+}
+
+func TestInvalidColorMode(t *testing.T) {
+	opts, fs, _ := testOptions(testListeners)
+	code, out, errb := execCLI([]string{"--color", "sometimes"}, opts)
+	if code != 2 {
+		t.Errorf("code = %d, want 2", code)
+	}
+	if !strings.Contains(errb, `invalid color mode "sometimes"`) {
+		t.Errorf("stderr = %q, want an invalid color mode error", errb)
+	}
+	if !strings.Contains(errb, "run 'kp --help' for usage") {
+		t.Errorf("stderr = %q, want the usage hint", errb)
+	}
+	if out != "" {
+		t.Errorf("unexpected stdout: %q", out)
+	}
+	if len(fs.protos) != 0 {
+		t.Errorf("scan should not run, got protos %v", fs.protos)
+	}
+}

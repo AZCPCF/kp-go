@@ -7,34 +7,94 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"text/tabwriter"
+	"unicode/utf8"
+
+	"charm.land/lipgloss/v2"
 
 	"github.com/azcpcf/kp-go/internal/group"
 	"github.com/azcpcf/kp-go/internal/scan"
+	"github.com/azcpcf/kp-go/internal/ui"
 )
 
-// PrintTable writes ls as a plain port/proto/address/process/pid table.
-func PrintTable(w io.Writer, ls []scan.Listener) {
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "PORT\tPROTO\tADDR\tPROCESS\tPID")
-	for _, l := range ls {
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", l.Port, l.Proto, l.Addr, l.Process, l.PID)
-	}
-	tw.Flush()
+// cell is one table cell. The style is applied after the text is padded so
+// ANSI sequences never affect column alignment.
+type cell struct {
+	text  string
+	style lipgloss.Style
 }
 
-// PrintGrouped writes gs as a process/pid/ports table.
-func PrintGrouped(w io.Writer, gs []group.Group) {
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "PROCESS\tPID\tPORTS")
+// writeTable writes header and rows as left-aligned columns with two spaces
+// of padding, matching text/tabwriter's output for plain text.
+func writeTable(w io.Writer, header []cell, rows [][]cell) {
+	widths := make([]int, len(header))
+	for i, c := range header {
+		widths[i] = utf8.RuneCountInString(c.text)
+	}
+	for _, row := range rows {
+		for i, c := range row {
+			if n := utf8.RuneCountInString(c.text); n > widths[i] {
+				widths[i] = n
+			}
+		}
+	}
+	writeRow := func(row []cell) {
+		for i, c := range row {
+			text := c.text
+			if i < len(row)-1 {
+				text += strings.Repeat(" ", widths[i]-utf8.RuneCountInString(text)+2)
+			}
+			fmt.Fprint(w, c.style.Render(text))
+		}
+		fmt.Fprintln(w)
+	}
+	writeRow(header)
+	for _, row := range rows {
+		writeRow(row)
+	}
+}
+
+// PrintTable writes ls as a styled port/proto/address/process/pid table.
+func PrintTable(w io.Writer, ls []scan.Listener, t ui.Theme) {
+	header := []cell{
+		{"PORT", t.Header},
+		{"PROTO", t.Header},
+		{"ADDR", t.Header},
+		{"PROCESS", t.Header},
+		{"PID", t.Header},
+	}
+	rows := make([][]cell, 0, len(ls))
+	for _, l := range ls {
+		rows = append(rows, []cell{
+			{strconv.Itoa(l.Port), t.Port},
+			{l.Proto, t.Proto(l.Proto)},
+			{l.Addr, t.Muted},
+			{l.Process, t.Process},
+			{l.PID, lipgloss.Style{}},
+		})
+	}
+	writeTable(w, header, rows)
+}
+
+// PrintGrouped writes gs as a styled process/pid/ports table.
+func PrintGrouped(w io.Writer, gs []group.Group, t ui.Theme) {
+	header := []cell{
+		{"PROCESS", t.Header},
+		{"PID", t.Header},
+		{"PORTS", t.Header},
+	}
+	rows := make([][]cell, 0, len(gs))
 	for _, g := range gs {
 		ports := make([]string, len(g.Listeners))
 		for i, l := range g.Listeners {
 			ports[i] = strconv.Itoa(l.Port)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", g.Process, g.PID, strings.Join(ports, ", "))
+		rows = append(rows, []cell{
+			{g.Process, t.Process},
+			{g.PID, lipgloss.Style{}},
+			{strings.Join(ports, ", "), t.Port},
+		})
 	}
-	tw.Flush()
+	writeTable(w, header, rows)
 }
 
 type jsonListener struct {
