@@ -12,9 +12,29 @@ import (
 	"strings"
 )
 
+// Socket states in /proc/net/{tcp,udp}: TCP LISTEN is 0A, an unconnected UDP
+// socket (the listening equivalent) is 07.
+const (
+	stateListenTCP = "0A"
+	stateListenUDP = "07"
+)
+
 type owner struct {
 	pid  string
 	comm string
+}
+
+type procFile struct {
+	path  string
+	state string
+	proto string
+}
+
+var procFiles = []procFile{
+	{"/proc/net/tcp", stateListenTCP, ProtoTCP},
+	{"/proc/net/tcp6", stateListenTCP, ProtoTCP},
+	{"/proc/net/udp", stateListenUDP, ProtoUDP},
+	{"/proc/net/udp6", stateListenUDP, ProtoUDP},
 }
 
 func parseAddr(s string) (string, int, error) {
@@ -67,35 +87,38 @@ func socketOwners() map[string]owner {
 	return res
 }
 
-func listListenersProc() ([]Listener, error) {
+func listListenersProc(proto string) ([]Listener, error) {
 	owners := socketOwners()
 	var res []Listener
-	for _, file := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
-		data, err := os.ReadFile(file)
+	for _, f := range procFiles {
+		if proto != ProtoAll && proto != f.proto {
+			continue
+		}
+		data, err := os.ReadFile(f.path)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
 			return nil, err
 		}
-		res = append(res, parseProcNet(string(data), owners)...)
+		res = append(res, parseProcNet(string(data), owners, f.state, f.proto)...)
 	}
 	return res, nil
 }
 
-func parseProcNet(data string, owners map[string]owner) []Listener {
+func parseProcNet(data string, owners map[string]owner, state, proto string) []Listener {
 	var res []Listener
 	lines := strings.Split(data, "\n")
 	for _, line := range lines[1:] {
 		f := strings.Fields(line)
-		if len(f) < 10 || f[3] != "0A" {
+		if len(f) < 10 || f[3] != state {
 			continue
 		}
 		addr, port, err := parseAddr(f[1])
 		if err != nil {
 			continue
 		}
-		l := Listener{Addr: addr, Port: port, Process: "-", PID: "-"}
+		l := Listener{Addr: addr, Port: port, Proto: proto, Process: "-", PID: "-"}
 		if o, ok := owners[f[9]]; ok {
 			l.Process, l.PID = o.comm, o.pid
 		}

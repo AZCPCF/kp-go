@@ -13,12 +13,12 @@ import (
 	"github.com/azcpcf/kp-go/internal/scan"
 )
 
-// PrintTable writes ls as a plain port/address/process/pid table.
+// PrintTable writes ls as a plain port/proto/address/process/pid table.
 func PrintTable(w io.Writer, ls []scan.Listener) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "PORT\tADDR\tPROCESS\tPID")
+	fmt.Fprintln(tw, "PORT\tPROTO\tADDR\tPROCESS\tPID")
 	for _, l := range ls {
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\n", l.Port, l.Addr, l.Process, l.PID)
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", l.Port, l.Proto, l.Addr, l.Process, l.PID)
 	}
 	tw.Flush()
 }
@@ -40,6 +40,7 @@ func PrintGrouped(w io.Writer, gs []group.Group) {
 type jsonListener struct {
 	Addr    string `json:"addr"`
 	Port    int    `json:"port"`
+	Proto   string `json:"proto"`
 	Process string `json:"process"`
 	PID     *int   `json:"pid"`
 }
@@ -57,6 +58,7 @@ func PrintJSON(w io.Writer, ls []scan.Listener) {
 		out = append(out, jsonListener{
 			Addr:    l.Addr,
 			Port:    l.Port,
+			Proto:   l.Proto,
 			Process: l.Process,
 			PID:     pidInt(l.PID),
 		})

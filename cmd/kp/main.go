@@ -35,6 +35,7 @@ func main() {
 	force := flag.Bool("force", false, "kill with SIGKILL")
 	flag.BoolVar(force, "f", false, "shorthand for --force")
 	jsonOut := flag.Bool("json", false, "output JSON")
+	proto := flag.String("proto", "tcp", "protocol to list: tcp, udp or all")
 	showVersion := flag.Bool("version", false, "print version")
 	positional := parseArgs()
 	if *showVersion {
@@ -42,7 +43,7 @@ func main() {
 		return
 	}
 
-	ls, err := scan.List()
+	ls, err := scan.List(*proto)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

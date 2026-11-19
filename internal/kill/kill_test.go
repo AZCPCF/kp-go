@@ -87,6 +87,24 @@ func TestKillForceUsesSIGKILL(t *testing.T) {
 	}
 }
 
+func TestKillUDP(t *testing.T) {
+	f := &fakeProc{alive: map[int]bool{30: true}}
+	ls := []scan.Listener{{Addr: "0.0.0.0", Port: 5353, Proto: "udp", Process: "avahi", PID: "30"}}
+	var out, errb bytes.Buffer
+
+	code := Run(&out, &errb, newTestKiller(f), ls, []string{"5353"}, false)
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "killed avahi (pid 30) on port 5353") {
+		t.Errorf("unexpected stdout: %q", out.String())
+	}
+	if want := []call{{30, syscall.SIGTERM}}; !reflect.DeepEqual(f.killCalls(), want) {
+		t.Errorf("got %v, want %v", f.killCalls(), want)
+	}
+}
+
 func TestKillDedupPID(t *testing.T) {
 	f := &fakeProc{alive: map[int]bool{10: true}}
 	ls := []scan.Listener{

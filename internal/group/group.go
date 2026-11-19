@@ -14,10 +14,13 @@ type Group struct {
 	Listeners []scan.Listener
 }
 
-// SortByPort sorts ls in place by ascending port.
+// SortByPort sorts ls in place by ascending port, then protocol.
 func SortByPort(ls []scan.Listener) {
 	sort.Slice(ls, func(i, j int) bool {
-		return ls[i].Port < ls[j].Port
+		if ls[i].Port != ls[j].Port {
+			return ls[i].Port < ls[j].Port
+		}
+		return ls[i].Proto < ls[j].Proto
 	})
 }
 
