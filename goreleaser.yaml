@@ -12,7 +12,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -s -w -X github.com/azcpcf/kp-go/internal/cli.version={{.Version}}
 
 archives:
   - formats:
